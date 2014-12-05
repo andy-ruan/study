@@ -1,0 +1,568 @@
+#!/usr/bin/env python
+# -*-: coding: utf-8 -*-
+
+''' Common tools.
+    author: andreruan@2013
+'''
+
+import sys
+import traceback
+import re
+import datetime
+import time
+import json
+import logging
+import logging.handlers
+import os
+import os.path
+import cgi
+import copy
+import subprocess
+import threading
+import MySQLdb as MSD
+
+logger = None
+############################################################ 
+
+class ConsoleHandler(logging.StreamHandler):
+    ''' 重写 logging.StreamHandler的输出函数, 支持中文输出. 
+        具体参见: lib\logging\__init__.py, class StreamHandler(Handler)
+    '''
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            #print msg
+            fs = "%s\n"
+            self.stream.write(fs % msg)
+            self.flush()
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except:
+            self.handleError(record)
+            
+def get_logger(name, file="data.log", size = 100 << 20, backup = 5, showConsole = False):
+    ''' initial a logger object, 5 backup files each no more than 100M.'''
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.DEBUG)
+    
+    handler = logging.handlers.RotatingFileHandler(file,maxBytes=size,backupCount = backup)
+    formatter = logging.Formatter('%(asctime)s %(levelname)s [:%(lineno)d] %(message)s')
+    handler.setFormatter(formatter) 
+    handler.setLevel(logging.DEBUG)
+    logger.addHandler(handler)
+    
+    if showConsole:
+    #    console = logging.StreamHandler()
+        console = ConsoleHandler()
+        console.setFormatter(formatter)
+        console.setLevel(logging.INFO)
+        logger.addHandler(console)
+    #print 'InitLogger [%s] use file [%s]'%(name,file)
+    return logger
+    
+def run_shell(strCommand):
+    ''' 
+    Description:在 shell 中运行命令 strCommand
+    @param (str) strCommand, shell 命令
+    @return (False, err_msg) | (True, out_msg) 返回错误信息或者命令行输出
+    '''
+    p = subprocess.Popen(strCommand,shell=True,close_fds=True,\
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdoutdata, stderrdata = p.communicate()
+    if p.returncode != 0:
+        #print('RunShell Error code [%d][%s]' % (p.returncode, stderrdata.strip()))
+        return False,stderrdata
+    else:
+        return True,stdoutdata
+            
+def get_module(filename):
+    conf_path = os.path.dirname(os.path.abspath(filename))
+    basename = os.path.basename(filename)
+    sys.path.insert(0, conf_path)
+    try:
+        mod = __import__(basename[:-3])
+        reload(mod)
+    except:
+        mod = None
+    sys.path[0] = "."
+    return mod
+    
+def find_min_N(array, N, cmp = None):
+    ''' find and return the top N min item.
+        ret[0] the min item,
+        ret[1] the 2nd-min one,
+        ...
+        find_min_N([1,2,3,4,5], 3) will return [1,2,3]
+    '''
+    length = len(array)
+    ret,i  = [], 0
+    if length < N * N:
+        ret.extend(array)
+        ret.sort(cmp)
+        ret = ret[:N]
+    else:
+        while i < length:
+            ret.extend(array[i:i+N])
+            i += N
+            ret.sort(cmp)
+            ret = ret[:N]
+    return ret
+    
+def find_max_N(array, N, cmp = None):
+    ''' find and return the top N max item.
+        ret[0] the max item,
+        ret[1] the 2nd-max one,
+        ...
+        
+        find_max_N([1,2,3,4,5], 3) will return [5,4,3]
+    '''
+    length = len(array)
+    ret, i = [], 0
+    if length < N * N:
+        ret.extend(array)
+        ret.sort(cmp)
+        ret = ret[-N:]
+    else:
+        while i < length:
+            ret.extend(array[i:i+N])
+            i += N
+            ret.sort(cmp)
+            ret = ret[-N:]
+    ret.reverse()
+    return ret
+    
+# parse CGI request parameters. k1=v1&k2=v2
+def getQueryDict(query_string):
+    query_dict = {}
+    for each in query_string.split("&"):
+        vals = each.split("=")
+        key,val = "", ""
+        for i in range(len(vals)):
+            if len(key) > 0:
+                break
+            key += vals[i]
+        if len(key) >= 1:
+            query_dict[key] = "=".join(vals[i:])
+    return query_dict
+
+def getQueryDictNoCase(query_string):
+    query_dict = getQueryDict(query_string)
+    ret_dict = {}
+    for key, val in query_dict.iteritems():
+        ret_dict[key.lower()] = val
+    return ret_dict
+
+def get_exception_stack():
+    ''' 获得异常堆栈信息
+    '''        
+    e_type, e_value, e_tb = sys.exc_info()
+    msgList = traceback.extract_tb(e_tb)
+    msg = '';
+    for filename, lineno, name, line in msgList:
+        #if line != None and not re.search('raise',line):
+        if line != None :
+            m1 = '[' + os.path.basename(str(filename)) + ':' + str(lineno) + '] ';
+            msg += m1.ljust(22) + str(name).ljust(25) + ' -->  ' + str(line) + '\n';
+
+    eStrType = str(e_type);
+    m0 = re.match("<(type|class) '([^)]*)'>",str(e_type));
+    if m0:
+        eStrType = m0.group(2);
+                    
+    preList = str(e_value).split('\n');
+    m = re.match('^[ \t]*([a-zA-Z0-9\.]*(Exception|Error)): ',preList[-1]);
+    if not m: 
+        preList[-1] = eStrType + ': ' + preList[-1];
+
+    msg += '\n'.join(preList); 
+
+    return msg;
+      
+def unicode_ljust(s, num):
+    '''  输出 unicode 格式的对齐. 替换系统函数 unicode.ljust
+    
+        说明: unicode 的 ljust 有问题, 对不齐.
+        len(u"中") == 1
+        len(u"中".encode("utf-8")) == 3
+        len(u"中".encode("gbk")) == 2
+    ''' 
+    val_c, val_e = unicode_count(s)
+    return s + " " * (num - 2 * val_c - val_e)
+        
+def unicode_rjust(s, num):
+    val_c, val_e = unicode_count(s)
+    return " " * (num - 2 * val_c - val_e) + s
+ 
+def unicode_count(s):
+    ''' 输出 unicode 串的中文、英文字符个数.
+    '''
+    val_c = len(s.encode("utf-8")) - len(s.encode("gbk"))
+    val_e = len(s) - val_c
+    return (val_c, val_e)
+
+def list_to_dict(arr):
+    ret = {}
+    for each in arr:
+        key = each["datetime"]
+        val = each["value"]
+        ret[key] = val
+    return ret
+       
+def load_config(config_path):
+    module = get_module("%s/config.py"%(config_path))
+    dict_feature = {}
+    attrid_list = []
+    for mod in module.feature_config:
+        for feature in mod["features"]:
+            if feature.get("separator", False):
+                continue
+            dict_feature[feature["id"]] = feature
+            attrid_list.append(feature["id"])
+            if not feature.has_key("author"):
+                feature["author"] = mod["author"]
+    for attr in attrid_list:
+        mod = get_module("%s/conf_%s.py"%(config_path, attr))
+        if not mod:
+            continue
+        logger.debug("%s: %s"%(attr, str(mod)))
+        dict_feature[attr].update(mod.conf) 
+    return module, dict_feature
+    
+def timestamp2datetime(intval):
+    return datetime.datetime.fromtimestamp(int(intval))
+    
+def datetime2timestamp(dt):
+    return int(float(str(time.mktime(dt.timetuple()))))
+
+def init_cgi():
+    print 'Content-Type: text/html; charset=UTF-8\n'
+    print '\n'
+    
+class XCGIEntity(object):
+    ''' CGI请求处理动作的实体, 从此类派生出自己的动作处理类.        
+    '''
+    def __init__(self, logger):
+        self.logger = logger
+        
+    def set_debug(self, flag):
+        self.debug = flag
+        
+    def _dispatch(self, queryDict):
+        try:
+            fun = getattr(self, self.method)
+        except:
+            return 210, "not support %s"%(self.method)
+            
+        try:
+            return fun(queryDict)
+        except Exception,e:
+            stack = get_exception_stack()
+            return 220, "%s\n\n%s"%(str(e),stack)
+            
+    def do_work(self, queryDict):
+        self.method =  queryDict.get("method", None)
+        if self.method:
+            return self._dispatch(queryDict)
+        elif hasattr(self, "list_methods"):
+            msg = self.list_methods()
+            return 0, msg.replace("\n","<br/>")
+        else:
+            return 200, "need method"
+
+class XCGIEntry(object):
+    ''' CGI程序入口, 使用方法:
+        logger = get_logger(...)
+        init_cgi()
+        entity = XCGIEntity(logger)
+        entry = XCGIEntry(logger, entity)
+        entry.do_Main()
+    '''
+    def __init__(self, logger, entity):
+        self.queryDict = {}
+        self.logger = logger
+        self.debug = False
+        self.agent = entity
+
+    def do_Main(self):
+        code, msg = 100, ""
+        try:
+            code, msg = self.do_CGIRequest()
+        except Exception,e:
+            stack = get_exception_stack()
+            msg = "%s\n\n%s\n\n%s\n"%(str(e), "#"*100, stack)
+            msg = msg.replace("\n","<br/>")
+        
+        self.do_CGIResponse(code, msg)
+            
+    def do_CGIRequest(self):
+        method = os.environ.get("REQUEST_METHOD",None)
+        queryString = os.environ.get("QUERY_STRING", "")
+        self.queryDict = getQueryDictNoCase(queryString)
+        code = 110
+        if not queryString:
+            msg = u"need queryString"
+        if method not in ("GET", "POST"):
+            msg = u"should be GET or POST, not %s"%method
+        elif method == 'GET':   # do_GET
+            self.debug = self.queryDict.get("debug", False)
+            self.agent.set_debug(self.debug)
+            self.logger.info("query: %s"%(str(self.queryDict)))
+            code, msg = self.agent.do_work(self.queryDict)
+        else:                   # do_POST
+            postStr = sys.stdin.read()
+            self.queryDict.update(json.loads(postStr))
+            self.logger.info("query: %s"%(str(self.queryDict)))
+            code, msg = self.agent.do_work(self.queryDict)
+        return code, msg
+        
+    def do_CGIResponse(self, code, message):
+        if self.debug:
+            print "<html><head><title></title></head><body>"
+            print "request: "
+            print str(self.queryDict)
+            print "<br/>" * 2
+            print "code: "
+            print code
+            print "<br/>" * 2
+            print unicode(message).encode("utf-8")
+            print "<br/>" * 2
+            print "</body></html>"
+        else:
+            print json.dumps({"code":code, "msg":message})
+
+class SQLUtil(object):
+    def __init__(self,tableName):
+        self.m_tableName = tableName
+    
+    def escapeString(self,strSQL):
+        strSQL = strSQL.replace('%', '%%')
+        return strSQL
+    
+    def getSelectSQL(self,selectDomain,whereCondition=None,sortDomain=None):
+        strSQL = 'select %s from %s ' % (selectDomain,self.m_tableName)
+        strSQL = self.escapeString(strSQL)
+        if whereCondition is not None:
+            strSQL += 'where %s ' % (whereCondition)
+        if sortDomain is not None:
+            strSQL += '%s' % (sortDomain)
+        return strSQL
+    
+    def getInsertSQL(self,insertDomain=None,values=''):
+        strSQL = 'insert into %s ' % (self.m_tableName)
+        if insertDomain is not None:
+            strSQL += '(%s) ' % (insertDomain)
+        strSQL += ' values(%s)' % (values)
+        return self.escapeString(strSQL)
+    
+    def getUpdateSQL(self,setDomain,whereCondition=None):
+        strSQL = 'update %s '%(self.m_tableName)
+        strSet = ''
+        if type(setDomain) == type(dict):
+            strSetList = []
+            for key,value in setDomain.items():
+                strSetList.append('%s=%s' % (key,value))
+            strSet = ','.join(strSetList)    
+        elif type(setDomain) == type('') or type(setDomain) == type(u''):
+            strSet = setDomain
+        else:
+            raise Exception('Unsupported setDomain format.')
+        
+        strSQL += 'set %s' % (strSet)
+        strSQL = self.escapeString(strSQL)
+        if whereCondition is not None:
+            strSQL += ' where %s' % (whereCondition)
+        return strSQL
+        
+    def getDeleteSQL(self,whereCondition=None):
+        strSQL = 'delete from %s'(self.m_tableName)
+        if whereCondition is not None:
+            strSQL += ' where %s' % (whereCondition)
+        return strSQL
+
+class DBBase(object):
+    def __init__(self, db_name, db_user, db_passwd, db_host, db_port = 3306,charset="utf8"):
+        self._m_db_host     = db_host
+        self._m_db_port     = db_port
+        self._m_db_database = db_name
+        self._m_db_user     = db_user
+        self._m_db_passwd   = db_passwd
+        self._m_db_charset  = charset
+        self._m_unix_socket = ''
+        self.getConnection()
+        
+    def __del__(self):
+        if self._m_oConn is not None:
+            self._m_oConn.close()
+            self._m_oConn = None
+    
+    def beginTransaction(self):
+        if self._m_oConn is not None:
+            self.endTransaction()
+        self.getConnection()
+  
+    def commit(self):
+        if self._m_oConn is not None:
+            return self._m_oConn.commit()
+        
+    def roolBack(self):
+        if self._m_oConn is not None:
+            return self._m_oConn.rollback()
+    
+    def endTransaction(self):
+        self._m_oConn.commit()
+        self._m_oConn.close()
+        self._m_oConn = None
+    
+    def testConnection(self):
+        if self._m_oConn is None:
+            return False
+        else:
+            try:
+                self._m_oConn.ping()
+            except MSD.OperationalError:
+                return False
+            return True
+    
+    def getConnection(self):
+        try:
+            self._m_oConn = MSD.connect(host=self._m_db_host,port=self._m_db_port,
+                                        db=self._m_db_database,user=self._m_db_user,
+                                        passwd=self._m_db_passwd,#unix_socket='',
+                                        charset=self._m_db_charset)
+        except Exception,e:
+            raise Exception('Error:Connet to %s@%s. Detail : %s.' % (self._m_db_user,self._m_db_host,e))
+        
+    def executeNoneQuerySQL(self,strSQL,listParams=[]):
+        if not self.testConnection():
+            self.getConnection()
+        if not isinstance(strSQL,(type(''),type(u''))):
+            strSQL = str(strSQL)
+        try:
+            oCursor = self._m_oConn.cursor()
+            count = oCursor.execute(strSQL,listParams)
+            oCursor.close()
+            self._m_oConn.commit()
+        except Exception,e:
+            raise Exception('Error:Execute sql: %s . Detail : %s' % (strSQL,e))
+        return count
+    
+    def executeQuerySQL(self,strSQL,listParams=[]):
+        if not self.testConnection():
+            self.getConnection()
+        if not isinstance(strSQL,(type(''),type(u''))):
+            strSQL = str(strSQL)
+        try:
+            oCursor = self._m_oConn.cursor()
+            oCursor.execute(strSQL,listParams)
+            result = oCursor.fetchall()
+            oCursor.close()
+        except Exception,e:
+            raise Exception('Error:Execute sql: %s . Detail : %s' % (strSQL,e))
+        return result
+    
+    def executeCountQuerySQL(self,strSQL,listParams=[]):
+        if not self.testConnection():
+            self.getConnection()
+        result = self.executeQuerySQL(strSQL, listParams)
+        if len(result)!=0 and len(result[0])!=0:
+            return result[0][0]
+        else:
+            return None
+  
+########################################################## 
+
+# return the first n lines.
+def getQuery(filename, maxlines = None):
+    querys = {}
+    fp = open(filename)
+    for line in fp:
+        fds = line.strip().split("\t")
+        if maxlines and len(querys) >= maxlines:
+            break
+        querys[fds[1]] = fds[0]
+    fp.close()
+    return querys
+    
+# return n lines from the two-third part of the file.
+def getLastQuery(filename, num):
+    querys = {}
+    num = max(num, 1)
+    c = 0
+    for c, l in enumerate(open(filename)): pass
+    c += 1
+    cnt = c - c / 3;
+    fp = open(filename)
+    for i in range(cnt): fp.next()
+    for line in fp:
+        fds = line.strip().split("\t")
+        if len(querys) >= num:
+            break
+        querys[fds[1]] = fds[0]
+    fp.close()
+    return querys
+ 
+# random select n items from list of querys.
+def selectQuery(querys, num):
+    index = random.sample(xrange(len(querys)), num)
+    return [ querys[each] for each in index ]
+
+# write msg info file, append or overwrite.
+def write_file(filename, msg, append=False):
+    mode = "w"
+    if append:
+        mode = "a"
+    try:
+        fp = open(filename, mode)
+        fp.write(msg)
+        fp.close()
+    except:
+        log.TLogErr("can not write to %s."%(filename))
+
+# thread pool to execute some process.
+#   subclass should overwrite self.proc function.
+class ThreadPool(object):
+    def __init__(self, num, qlist, nameprefix="th"):
+        self.thnum = max(num,1)
+        self.name = nameprefix
+        self.qlist = qlist
+        self.rlist = []
+    
+    def proc(self, query, qsize):
+        pass
+        
+    def run_and_wait(self):
+        def thread_fun(tqueue, rqueue):
+            while tqueue.qsize() > 0:
+                try:
+                    query = tqueue.get_nowait()
+                except:
+                    break
+                    
+                ret = self.proc(query, tqueue.qsize())
+                if ret:
+                    rqueue.put_nowait(ret)
+        
+        tqueue = Queue.Queue()
+        rqueue = Queue.Queue()
+        threads = []
+        for l in self.qlist:
+            tqueue.put_nowait(l)
+        
+        for i in xrange(self.thnum):
+            threads.append(threading.Thread( \
+                target = thread_fun,\
+                name="%s-%s"%(self.name,i),\
+                args=(tqueue, rqueue)))
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+            
+        self.rlist = []
+        while rqueue.qsize():
+            self.rlist.append(rqueue.get_nowait())
+        return self.rlist
+
+    __call__ = run_and_wait
+    
+##################### spider.
