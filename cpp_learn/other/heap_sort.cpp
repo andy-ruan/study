@@ -1,111 +1,117 @@
 #include <iostream>
 #include <cassert>
 
-// DATA::operator <
-// DATA::operator = 
 typedef int DATA;
 
-class MinHeap{
-    public:
-        MinHeap(int size);
-        ~MinHeap();
+//////////////////////////////////////////////////////////////////
+class HeapSort{
+    friend std::ostream& operator<<(std::ostream& os, const HeapSort& heap);
 
     public:
-        void insert(const DATA& dt);
-        void heapify(int top);
-        bool empty() const { return count <= 0;}
-        DATA pop();
+        HeapSort(const DATA* data, int size);
+        ~HeapSort();
 
-        std::ostream& print(std::ostream& ss);
+    public:
+        void sort();
+
+    protected:
+        void heapify(int last);
+        void adjust(int count);
 
     private:
-        MinHeap(const MinHeap&);
-        MinHeap& operator = (const MinHeap&);
+        HeapSort(const HeapSort&);
+        HeapSort& operator = (const HeapSort&);
 
     protected:
         DATA*   data;  
         int     size;
-        int     count;
 };
 
-MinHeap::MinHeap(int size)
- :size(size), count(0)
+HeapSort::HeapSort(const DATA* data, int size)
+ :size(size)
 { 
-    data = new DATA[size]; 
+    this->data = new DATA[size]; 
+    for ( int i = 0; i < size; i++){
+        this->data[i] = data[i];
+    }
 }
 
-MinHeap::~MinHeap()
+HeapSort::~HeapSort()
 {
-    count = size = 0;
+    size = 0;
     delete [] data;
     data = NULL;
 }
-std::ostream& MinHeap::print(std::ostream& ss)
+std::ostream& operator<<(std::ostream& os, const HeapSort& heap)
 {
-    assert(0 <= count && count <= size);
-    for ( int i = 0; i < count;i ++){
-        ss<<data[i]<<" ";
+    for ( int i = 0; i < heap.size;i ++){
+        os<<heap.data[i]<<" ";
     }
-    return ss;
+    return os;
 }
 
-void MinHeap::insert(const DATA& val)
+void HeapSort::sort()
 {
-    if ( count >= size ){
-        if ( val < data[0] ){
-            pop();
-        } else {
-            return; // ignore.
-        }
+//    std::cout<<*this<<std::endl<<std::endl;
+    for ( int i = 1; i < size; i++){
+        heapify(i);
     }
-    int cur = count ++;
-    while ( cur > 0){
-        int par = (cur - 1) / 2;
-        if ( val < data[par] ){
-            data[cur] = data[par];
-        } else {
-            break;
-        }
-        cur = par;
+//    std::cout<<*this<<std::endl<<std::endl;
+    for ( int i = 0; i < size; i++){
+        const DATA tmp = data[0];
+        data[0] = data[size-i-1];
+        data[size-i-1] = tmp;
+        adjust(size - i - 1);
+//        std::cout<<*this<<std::endl;
     }
-    data[cur] = val;
 }
 
-DATA MinHeap::pop()
+void HeapSort::adjust(int count)
 {
-    DATA min = data[0];
-    if ( count >= 1 ){
-        data[0] = data[--count];
-        if ( count > 0){
-            heapify(0);
-        }
-    }
-    return min;
-}
-void MinHeap::heapify(int top)
-{
-    assert( 0 <= top && top < count);
+    // first is max.
+    //
+    int top = 0; 
     DATA val = data[top];
 
-    // parent < left, parent < right.
-    for ( int child = 2 * top + 1; child < count; child = 2 * top + 1){
-        if ( data[child] < val ){
-            if ( child + 1 < count && data[child+1] < data[child] ){
-                data[top] = data[child+1];
-                top = child + 1;
+    // left < parent, right < parent.
+    for ( int left = 2 * top + 1; left < count; left = 2 * top + 1){
+        int right = left + 1;
+        if ( val < data[left]){
+            if ( left + 1 < count && data[left] < data[right] ){
+                data[top] = data[right];
+                top = right;
             } else {
-                data[top] = data[child];
-                top = child;
+                data[top] = data[left];
+                top = left;
             }
-        } else if (child +1 < count && data[child+1] < val){
-            data[top] = data[child+1];
-            top = child + 1;
+        } else if (right < count && val < data[right]){
+            data[top] = data[right];
+            top = right;
         } else {
             break;
         }
     }
-    assert(0 <= top && top < count);
     data[top] = val;
+}
+
+void HeapSort::heapify(int last)
+{
+    // first is max.
+    while ( last > 0){
+        int parent = (last - 1) / 2;
+        if ( data[parent] < data[last] ){
+            DATA tmp = data[last];
+            data[last] = data[parent];
+            data[parent] = tmp;
+            last = parent;
+        } else {
+            break;
+        }
+    }
+
+/*
+*/
+
 }
 
 #ifdef WITH_MAIN_HEAP_SORT
@@ -117,17 +123,17 @@ int main()
 {
     srand(time(NULL));    
     int size = rand() % 100 + 1;
-    MinHeap heap(10);
+    DATA    data[101];
+//    size = 10;
     for ( int i = 0; i < size; i++){
-        heap.insert(rand()%10000);
+        data[i] = (rand()%10000);
+        std::cout<<data[i] <<" ";
     }
-    for ( int i = 0; i < size; i++){
-        if (heap.empty()){
-            break;
-        }
-        heap.print(std::cout)<<std::endl;
-        heap.pop();
-    }
+    std::cout<<std::endl<<std::endl;
+
+    HeapSort heap(data, size);
+    heap.sort();
+    std::cout<<heap<<std::endl;
 }
 
 #endif
